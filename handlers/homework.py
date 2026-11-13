@@ -4,7 +4,7 @@ import aiosqlite
 from datetime import date,timedelta,datetime
 from forms.hw import AddHomework
 from aiogram.fsm.context import FSMContext
-from routes import router, ADMIN1_ID, ADMIN2_ID,DB_NAME, WEEKDAYS_RU, get_main_reply_keyboard
+from handlers.routes import router, ADMIN1_ID, ADMIN2_ID,DB_NAME, WEEKDAYS_RU, get_main_reply_keyboard
 
 cancel_kb = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Отмена")]],

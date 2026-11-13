@@ -1,7 +1,7 @@
 from aiogram import F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 import aiosqlite
-from routes import router, ADMIN1_ID, ADMIN2_ID, Days, DB_NAME, WEEKDAYS_RU, get_main_reply_keyboard
+from handlers.routes import router, ADMIN1_ID, ADMIN2_ID, Days, DB_NAME, WEEKDAYS_RU, get_main_reply_keyboard
 
 async def get_schedule_for_day(day: str):
     async with aiosqlite.connect(DB_NAME) as db:
