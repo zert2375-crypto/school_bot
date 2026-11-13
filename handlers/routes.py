@@ -47,7 +47,7 @@ async def init_db():
 
         await db.commit()
 
-def get_main_reply_keyboard(user_id: str):
+def get_main_reply_keyboard(user_id: int):
     if (user_id != ADMIN1_ID) and (user_id != ADMIN2_ID):
         keyboard = ReplyKeyboardMarkup(
             keyboard=[

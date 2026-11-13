@@ -164,7 +164,7 @@ async def cancel_add_hw(message: Message, state: FSMContext):
 
 @router.message(F.text == "Добавить дз")
 async def start_add_hw(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN1_ID or message.from_user.id != ADMIN2_ID:
+    if message.from_user.id != ADMIN1_ID and message.from_user.id != ADMIN2_ID:
         return
 
     await state.set_state(AddHomework.subject)
@@ -249,7 +249,7 @@ async def process_photo(message: Message, state: FSMContext):
 
 @router.message(F.text == "Удалить дз")
 async def show_delete_hw_menu(message: Message):
-    if message.from_user.id != ADMIN1_ID or message.from_user.id != ADMIN2_ID:
+    if message.from_user.id != ADMIN1_ID and message.from_user.id != ADMIN2_ID:
         return
 
     items = await get_all_active_homework()
@@ -270,7 +270,7 @@ async def show_delete_hw_menu(message: Message):
 
 @router.callback_query(F.data.startswith("del_hw_"))
 async def process_delete_hw(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN1_ID or callback.from_user.id != ADMIN2_ID:
+    if callback.from_user.id != ADMIN1_ID and callback.from_user.id != ADMIN2_ID:
         await callback.answer("Нет прав.", show_alert=True)
         return
 

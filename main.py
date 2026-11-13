@@ -4,6 +4,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 import asyncio
 from handlers.routes import router,init_db
+import handlers.homework
+import handlers.schedule
 
 load_dotenv()
 TOKEN = getenv("BOT_TOKEN")
