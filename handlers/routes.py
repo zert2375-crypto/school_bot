@@ -70,7 +70,9 @@ def get_main_reply_keyboard(user_id: int):
                     [KeyboardButton(text="Расписание")],
                     [KeyboardButton(text="Добавить дз")],
                     [KeyboardButton(text="Изменить дз")],
-                    [KeyboardButton(text="Удалить дз")]
+                    [KeyboardButton(text="Удалить дз")],
+                    [KeyboardButton(text="Загрузить фото задания")],
+                    [KeyboardButton(text="Управление фото заданий")]
                 ],
                 resize_keyboard=True
             )

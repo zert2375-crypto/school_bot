@@ -2,49 +2,136 @@ from aiogram import F
 from aiogram.types import InputMediaPhoto, CallbackQuery, Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 import aiosqlite
 from datetime import date, timedelta, datetime
-from forms.hw import AddHomework, EditHomework
+from forms.hw import AddHomework, EditHomework, AddTaskPhoto
 from aiogram.fsm.context import FSMContext
 from handlers.routes import ai_client, router, ADMIN1_ID, ADMIN2_ID, DB_NAME, WEEKDAYS_RU, get_main_reply_keyboard
+import os
+import base64
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Строим надежный путь: поднимаемся наверх из handlers и заходим в pdfs
+pdf_path = os.path.join(BASE_DIR, "..", "pdfs", "algebra_10-11_kl_ja_alimov_.pdf")
 
 cancel_kb = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Отмена")]],
     resize_keyboard=True
 )
 
+async def get_all_task_images():
+    """Получает список всех сохраненных фото заданий."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT id, subject, task_number FROM task_images ORDER BY id DESC")
+        return await cursor.fetchall()
+
+async def delete_task_image_by_id(image_id: int):
+    """Удаляет конкретное фото задания по его ID."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM task_images WHERE id = ?", (image_id,))
+        await db.commit()
+
+async def clear_all_task_images():
+    """Полностью очищает таблицу task_images."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM task_images")
+        await db.commit()
+
+async def get_task_image(subject: str, task_text: str):
+    """Ищет сохраненное админом фото задания по совпадению номера в тексте задачи."""
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "SELECT subject, task_number, file_id FROM task_images WHERE ? LIKE '%' || task_number || '%'",
+            (task_text,)
+        )
+        rows = await cursor.fetchall()
+        
+        for db_subject, task_number, file_id in rows:
+            if db_subject.lower() in subject.lower():
+                return file_id
+                
+    return None
+
+async def get_textbook_for_subject(subject: str):
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT subject, textbook FROM textbooks")
+        rows = await cursor.fetchall()
+        
+        for db_subject, textbook in rows:
+            if db_subject.lower() in subject.lower():
+                return textbook
+                
+    return "Стандартный школьный учебник 10 класса"
+
+def sanitize_html(text: str) -> str:
+    return text.replace("<", "&lt;").replace(">", "&gt;").replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>").replace("&lt;i&gt;", "<i>").replace("&lt;/i&gt;", "</i>").replace("&lt;code&gt;", "<code>").replace("&lt;/code&gt;", "</code>")
+
 # Функция генерации ответа через DeepSeek API
-async def solve_homework_with_ai(subject: str, task: str = "", textbook: str = None):
+async def solve_homework_with_ai(subject: str, task: str = "", textbook: str = None, photo_file_id: str = None, bot_instance=None):
     task_text = task if task else "Задание не указано"
-    textbook_info = f" по учебнику: {textbook}" if textbook else ""
     
+    if not textbook:
+        textbook = "Алгебра и начала математического анализа. 10-11 классы (Алимов Ш.А.)"
+        
     prompt = (
-        f"Ты — умный репетитор и помощник для ученика 10 класса. "
-        f"Тебе нужно подробно решить или выполнить домашнее задание по предмету '{subject}'{textbook_info}.\n\n"
-        f"Текст задания / номера:\n{task_text}\n\n"
-        f"Требования к ответу:\n"
-        f"1. Напиши понятный ход решения, объясни шаги (формулы, правила, законы).\n"
-        f"2. Выдели итоговый ответ жирным шрифтом.\n"
-        f"3. Оформи ответ красиво с использованием HTML-тегирования для Telegram (например, <b>, <i>, <code>)."
+        f"Ты — строгий эксперт по школьной программе РФ и преподаватель математики.\n"
+        f"Ученик прислал конкретное задание из учебника: «{task_text}» (Предмет: {subject}, Учебник: {textbook}).\n\n"
+        f"🚨 ЖЕСТКИЕ ПРАВИЛА ДЛЯ РЕШЕНИЯ:\n"
+        f"1. Если приложено изображение с условием, опирайся в первую очередь на него!\n"
+        f"2. НАЙДИ И ПОКАЖИ ТОЧНЫЕ ЧИСЛА И УСЛОВИЕ. Категорически запрещено выдумывать числа или знаки из головы!\n"
+        f"3. В самом начале ответа выпиши точное условие задачи.\n"
+        f"4. Распиши подробное пошаговое решение.\n"
+        f"5. Математические формулы пиши через Unicode (², ³, √, и т.д.) или оборачивай в теги <code>...</code>.\n"
+        f"6. Разрешенные HTML-теги для форматирования: строго только <b>, <i>, <code>. Никакого LaTeX.\n"
+        f"7. В самом конце напиши жирным шрифтом: <b>Ответ: ...</b>"
     )
+
+    content_payload = []
     
+    # Если есть фото и передан экземпляр бота, скачиваем картинку и конвертируем в base64
+    if photo_file_id and bot_instance:
+        try:
+            file_info = await bot_instance.get_file(photo_file_id)
+            file_bytes = await bot_instance.download_file(file_info.file_path)
+            encoded_image = base64.b64encode(file_bytes.read()).decode('utf-8')
+            
+            content_payload.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{encoded_image}"
+                }
+            })
+        except Exception as e:
+            print(f"⚠️ Не удалось скачать фото для ИИ: {e}")
+
+    content_payload.append({
+        "type": "text",
+        "text": prompt
+    })
+
     try:
-        print(f"🔄 Отправка запроса в DeepSeek для предмета: {subject}...")
+        print(f"🔄 Отправка запроса в ИИ ({subject} | Задание: {task_text} | Фото: {'Да' if photo_file_id else 'Нет'})...")
+        
         response = await ai_client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-flash", # или модель, поддерживающая vision (если дефолтная ругается на картинки)
             messages=[
-                {"role": "system", "content": "Ты полезный школьный репетитор, который помогает ученикам с домашними заданиями."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system", 
+                    "content": "Ты академический помощник. Ты решаешь задачи строго по предоставленным условиям и изображениям."
+                },
+                {"role": "user", "content": content_payload if len(content_payload) > 1 else prompt}
             ],
             stream=False
         )
-        print("✅ Ответ от DeepSeek успешно получен!")
+        
+        print("✅ Ответ от ИИ успешно получен!")
         return response.choices[0].message.content
     except Exception as e:
         print(f"❌ ОШИБКА в solve_homework_with_ai: {e}")
-        return f"⚠️ Не удалось сгенерировать решение через ИИ. Ошибка: {e}"
+        return f"⚠️ Не удалось сгенерировать решение. Ошибка: {e}"
 
 async def add_homework_to_db(subject: str, task: str, due_date: str, file_id: str = None, textbook: str = None):
     async with aiosqlite.connect(DB_NAME) as db:
-        # Проверяем, есть ли уже дз на эту дату и предмет (замена)
         cursor = await db.execute(
             "SELECT id FROM homework WHERE due_date = ? AND subject = ?",
             (due_date, subject)
@@ -107,6 +194,53 @@ async def delete_homework_by_id(hw_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM homework WHERE id = ?", (hw_id,))
         await db.commit()
+
+@router.message(F.text == "Управление фото заданий")
+async def show_manage_photos_menu(message: Message):
+    if message.from_user.id != ADMIN1_ID and message.from_user.id != ADMIN2_ID:
+        return
+
+    items = await get_all_task_images()
+    if not items:
+        await message.answer("📁 В базе данных нет сохраненных фотографий заданий.")
+        return
+
+    buttons = []
+    for img_id, subject, task_number in items:
+        btn_text = f"🗑 {subject} | №{task_number}"
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"del_img_{img_id}")])
+
+    # Кнопка полной очистки таблицы
+    buttons.append([InlineKeyboardButton(text="⚠️ Очистить все фото", callback_data="clear_all_imgs")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer(
+        "📂 <b>Управление фотографиями заданий:</b>\nНажмите на конкретное фото, чтобы удалить его, или выберите очистку всех данных.",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+@router.callback_query(F.data.startswith("del_img_"))
+async def process_delete_single_image(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN1_ID and callback.from_user.id != ADMIN2_ID:
+        await callback.answer("Нет прав.", show_alert=True)
+        return
+
+    img_id = int(callback.data.split("_")[-1])
+    await delete_task_image_by_id(img_id)
+
+    await callback.answer("Фото задания успешно удалено!", show_alert=True)
+    await callback.message.edit_text("✅ Выбранное фото удалено из базы данных.")
+
+@router.callback_query(F.data == "clear_all_imgs")
+async def process_clear_all_images(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN1_ID and callback.from_user.id != ADMIN2_ID:
+        await callback.answer("Нет прав.", show_alert=True)
+        return
+
+    await clear_all_task_images()
+    await callback.answer("Все фотографии заданий удалены!", show_alert=True)
+    await callback.message.edit_text("🗑 Таблица `task_images` полностью очищена.")
 
 @router.message(F.text == "Домашка")
 async def show_hw_menu(message: Message):
@@ -215,19 +349,32 @@ async def process_ai_solve(callback: CallbackQuery):
             
         subject, task, textbook = row
         
+        # 🔍 Ищем прикрепленное админом фото для этого задания
+        admin_photo_id = await get_task_image(subject, task)
+
         wait_msg = await callback.message.answer("⏳ Нейронка думает над решением...")
         
-        solution = await solve_homework_with_ai(subject, task, textbook)
+        # Передаем bot_instance=callback.bot, чтобы функция могла скачать картинку
+        solution = await solve_homework_with_ai(
+            subject=subject, 
+            task=task, 
+            textbook=textbook, 
+            photo_file_id=admin_photo_id, 
+            bot_instance=callback.bot
+        )
         
         await wait_msg.delete()
         
         if len(solution) > 4000:
             solution = solution[:4000] + "\n\n...(текст сокращен из-за лимита Telegram)"
             
+        safe_solution = sanitize_html(solution)
+            
         await callback.message.answer(
-            f"🤖 <b>Решение от ИИ ({subject}):</b>\n\n{solution}",
+            f"🤖 <b>Решение от ИИ ({subject}):</b>\n\n{safe_solution}",
             parse_mode="HTML"
         )
+
     except Exception as e:
         print(f"❌ ОШИБКА в ai_solve: {e}")
         try:
@@ -466,5 +613,56 @@ async def process_edit_photo(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "✅ Домашнее задание успешно обновлено!",
+        reply_markup=get_main_reply_keyboard(message.from_user.id)
+    )
+
+@router.message(F.text == "Загрузить фото задания")
+async def start_upload_task_photo(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN1_ID and message.from_user.id != ADMIN2_ID:
+        return
+    
+    await state.set_state(AddTaskPhoto.waiting_for_photo)
+    await message.answer("📸 Отправьте фотографию задания из учебника:", reply_markup=cancel_kb)
+
+# 2. Получаем фото от админа
+@router.message(AddTaskPhoto.waiting_for_photo, F.photo)
+async def process_task_photo(message: Message, state: FSMContext):
+    # Берем фото в самом высоком разрешении
+    file_id = message.photo[-1].file_id
+    await state.update_data(file_id=file_id)
+    
+    await state.set_state(AddTaskPhoto.waiting_for_subject)
+    await message.answer("📚 К какому предмету относится это задание? (например: <i>Алгебра</i>, <i>Геометрия</i>, <i>Физика</i>):", parse_mode="HTML")
+
+# 3. Получаем предмет
+@router.message(AddTaskPhoto.waiting_for_subject)
+async def process_task_subject(message: Message, state: FSMContext):
+    subject = message.text.strip()
+    await state.update_data(subject=subject)
+    
+    await state.set_state(AddTaskPhoto.waiting_for_task_number)
+    await message.answer("🔢 Введите точный номер задания (например: <i>165</i> или <i>165(2)</i>):", parse_mode="HTML")
+
+# 4. Получаем номер задания и сохраняем в базу task_images
+@router.message(AddTaskPhoto.waiting_for_task_number)
+async def process_task_number(message: Message, state: FSMContext):
+    task_number = message.text.strip()
+    data = await state.get_data()
+    
+    file_id = data["file_id"]
+    subject = data["subject"]
+    
+    # Записываем в таблицу task_images базы данных Schedule.sql
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "INSERT INTO task_images (subject, task_number, file_id) VALUES (?, ?, ?)",
+            (subject, task_number, file_id)
+        )
+        await db.commit()
+        
+    await state.clear()
+    await message.answer(
+        f"✅ Фото успешно сохранено!\n📚 Предмет: <b>{subject}</b>\n🔢 Номер: <b>{task_number}</b>",
+        parse_mode="HTML",
         reply_markup=get_main_reply_keyboard(message.from_user.id)
     )
