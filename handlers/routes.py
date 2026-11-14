@@ -4,6 +4,9 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 import aiosqlite
 import dotenv
 from os import getenv
+from google import genai
+
+ai_client = genai.Client(api_key=getenv("GEMINI_API_KEY"))
 
 dotenv.load_dotenv(override=True)
 ADMIN1_ID = int(getenv("ADMIN1_ID"))
@@ -42,6 +45,7 @@ async def init_db():
                     task TEXT NOT NULL,
                     due_date TEXT NOT NULL,
                     file_id TEXT
+                    textbook TEXT
                 )
             """)
 
@@ -62,6 +66,7 @@ def get_main_reply_keyboard(user_id: int):
                     [KeyboardButton(text="Домашка")],
                     [KeyboardButton(text="Расписание")],
                     [KeyboardButton(text="Добавить дз")],
+                    [KeyboardButton(text="Изменить дз")],
                     [KeyboardButton(text="Удалить дз")]
                 ],
                 resize_keyboard=True

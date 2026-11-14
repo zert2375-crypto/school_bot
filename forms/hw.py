@@ -6,3 +6,10 @@ class AddHomework(StatesGroup):
     task_group2 = State()
     due_date = State()
     photo = State()
+    textbook = State()
+
+class EditHomework(StatesGroup):
+    select_hw = State()
+    new_task = State()
+    new_textbook = State()
+    new_photo = State()
