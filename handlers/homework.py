@@ -1,22 +1,25 @@
 from aiogram import F
-from aiogram.types import InputMediaPhoto,CallbackQuery,Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InputMediaPhoto, CallbackQuery, Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 import aiosqlite
-from datetime import date,timedelta,datetime
+from datetime import date, timedelta, datetime
 from forms.hw import AddHomework, EditHomework
 from aiogram.fsm.context import FSMContext
-from handlers.routes import ai_client,router, ADMIN1_ID, ADMIN2_ID,DB_NAME, WEEKDAYS_RU, get_main_reply_keyboard
+from handlers.routes import ai_client, router, ADMIN1_ID, ADMIN2_ID, DB_NAME, WEEKDAYS_RU, get_main_reply_keyboard
 
 cancel_kb = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Отмена")]],
     resize_keyboard=True
 )
 
-async def solve_homework_with_ai(subject: str, task: str, textbook: str):
+# Функция генерации ответа через DeepSeek API
+async def solve_homework_with_ai(subject: str, task: str = "", textbook: str = None):
+    task_text = task if task else "Задание не указано"
     textbook_info = f" по учебнику: {textbook}" if textbook else ""
+    
     prompt = (
         f"Ты — умный репетитор и помощник для ученика 10 класса. "
         f"Тебе нужно подробно решить или выполнить домашнее задание по предмету '{subject}'{textbook_info}.\n\n"
-        f"Текст задания / номера:\n{task}\n\n"
+        f"Текст задания / номера:\n{task_text}\n\n"
         f"Требования к ответу:\n"
         f"1. Напиши понятный ход решения, объясни шаги (формулы, правила, законы).\n"
         f"2. Выдели итоговый ответ жирным шрифтом.\n"
@@ -24,20 +27,40 @@ async def solve_homework_with_ai(subject: str, task: str, textbook: str):
     )
     
     try:
-        response = ai_client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=prompt,
+        print(f"🔄 Отправка запроса в DeepSeek для предмета: {subject}...")
+        response = await ai_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "Ты полезный школьный репетитор, который помогает ученикам с домашними заданиями."},
+                {"role": "user", "content": prompt}
+            ],
+            stream=False
         )
-        return response.text
+        print("✅ Ответ от DeepSeek успешно получен!")
+        return response.choices[0].message.content
     except Exception as e:
+        print(f"❌ ОШИБКА в solve_homework_with_ai: {e}")
         return f"⚠️ Не удалось сгенерировать решение через ИИ. Ошибка: {e}"
 
-async def add_homework_to_db(subject: str, task: str, due_date: str, file_id: str = None):
+async def add_homework_to_db(subject: str, task: str, due_date: str, file_id: str = None, textbook: str = None):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            "INSERT INTO homework (subject, task, due_date, file_id) VALUES (?, ?, ?, ?)",
-            (subject, task, due_date, file_id)
+        # Проверяем, есть ли уже дз на эту дату и предмет (замена)
+        cursor = await db.execute(
+            "SELECT id FROM homework WHERE due_date = ? AND subject = ?",
+            (due_date, subject)
         )
+        existing = await cursor.fetchone()
+        
+        if existing:
+            await db.execute(
+                "UPDATE homework SET task = ?, file_id = ?, textbook = ? WHERE due_date = ? AND subject = ?",
+                (task, file_id, textbook, due_date, subject)
+            )
+        else:
+            await db.execute(
+                "INSERT INTO homework (subject, task, due_date, file_id, textbook) VALUES (?, ?, ?, ?, ?)",
+                (subject, task, due_date, file_id, textbook)
+            )
         await db.commit()
 
 async def get_homework_by_date(target_date: str):
@@ -94,7 +117,6 @@ async def show_hw_menu(message: Message):
     await message.answer("За какой период показать домашнее задание?", reply_markup=kb)
 
 @router.callback_query(F.data == "hw_tomorrow")
-@router.callback_query(F.data == "hw_tomorrow")
 async def send_tomorrow_hw(callback: CallbackQuery):
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
     items = await get_homework_by_date(tomorrow)
@@ -110,7 +132,6 @@ async def send_tomorrow_hw(callback: CallbackQuery):
         
         text = f"📚 <b>{subject}:</b>{tb_mark}\n{task}{photo_mark}"
         
-        # Создаем кнопку с уникальным callback_data, содержащим ID задания
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🧠 Решить с помощью ИИ", callback_data=f"ai_solve_{hw_id}")]
         ])
@@ -128,7 +149,6 @@ async def send_next_week_hw(callback: CallbackQuery):
         await callback.message.answer("На следующую неделю заданий пока не добавлено.")
         return
 
-    # Группируем задания по датам
     grouped_hw = {}
     photos = []
 
@@ -147,10 +167,8 @@ async def send_next_week_hw(callback: CallbackQuery):
                 )
             )
 
-    # Выводим общую шапку
     await callback.message.answer("🗓 <b>Домашнее задание на следующую неделю:</b>", parse_mode="HTML")
 
-    # Для каждого дня и каждого предмета отправляем красивый блок с кнопкой ИИ
     for due_date_str, tasks_list in grouped_hw.items():
         date_obj = datetime.strptime(due_date_str, "%Y-%m-%d")
         day_name = WEEKDAYS_RU[date_obj.weekday()]
@@ -166,55 +184,56 @@ async def send_next_week_hw(callback: CallbackQuery):
                 f"<blockquote>{task}{photo_mark}</blockquote>"
             )
             
-            # Индивидуальная кнопка для решения этого конкретного задания
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=f"🧠 Решить ({subject})", callback_data=f"ai_solve_{hw_id}")]
             ])
             
             await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
 
-    # Если были прикрепленные фото, отправляем их пачкой или одиночным
     if len(photos) == 1:
         await callback.message.answer_photo(photo=photos[0].media, caption=photos[0].caption)
     elif len(photos) > 1:
         await callback.message.answer_media_group(media=photos)
 
+# Обработчик нажатия на кнопку ИИ-решения
 @router.callback_query(F.data.startswith("ai_solve_"))
 async def process_ai_solve(callback: CallbackQuery):
-    hw_id = int(callback.data.split("_")[-1])
-    await callback.answer("🤖 Нейронка думает над решением...")
+    try:
+        hw_id = int(callback.data.split("_")[-1])
+        await callback.answer("🤖 Секунду, генерирую решение...")
     
-    # Достаем задание из базы по его ID
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute(
-            "SELECT subject, task, textbook FROM homework WHERE id = ?",
-            (hw_id,)
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute(
+                "SELECT subject, task, textbook FROM homework WHERE id = ?",
+                (hw_id,)
+            )
+            row = await cursor.fetchone()
+            
+        if not row:
+            await callback.message.answer("Задание не найдено в базе данных.")
+            return
+            
+        subject, task, textbook = row
+        
+        wait_msg = await callback.message.answer("⏳ Нейронка думает над решением...")
+        
+        solution = await solve_homework_with_ai(subject, task, textbook)
+        
+        await wait_msg.delete()
+        
+        if len(solution) > 4000:
+            solution = solution[:4000] + "\n\n...(текст сокращен из-за лимита Telegram)"
+            
+        await callback.message.answer(
+            f"🤖 <b>Решение от ИИ ({subject}):</b>\n\n{solution}",
+            parse_mode="HTML"
         )
-        row = await cursor.fetchone()
-        
-    if not row:
-        await callback.message.answer("Задание не найдено в базе данных.")
-        return
-        
-    subject, task, textbook = row
-    
-    # Отправляем временное сообщение о генерации
-    wait_msg = await callback.message.answer("⏳ Генерирую пошаговое решение с помощью Gemini...")
-    
-    # Генерируем ответ через ИИ
-    solution = await solve_homework_with_ai(subject, task, textbook)
-    
-    # Удаляем сообщение «подождите»
-    await wait_msg.delete()
-    
-    # Защита от превышения лимита символов в Telegram (4096 символов)
-    if len(solution) > 4000:
-        solution = solution[:4000] + "\n\n...(текст сокращен из-за лимита Telegram)"
-        
-    await callback.message.answer(
-        f"🤖 <b>Решение от Gemini ({subject}):</b>\n\n{solution}",
-        parse_mode="HTML"
-    )
+    except Exception as e:
+        print(f"❌ ОШИБКА в ai_solve: {e}")
+        try:
+            await callback.message.answer(f"⚠️ Произошла ошибка: {e}")
+        except:
+            pass
 
 @router.message(F.text == "Отмена")
 async def cancel_add_hw(message: Message, state: FSMContext):
@@ -248,14 +267,13 @@ async def process_task(message: Message, state: FSMContext):
     subj = data["subject"]
     
     if subj.lower().startswith("английск"):
-        # Сохраняем задание 1-й группы и переходим к вопросу про 2-ю группу
         await state.update_data(task_g1=message.text)
         await state.set_state(AddHomework.task_group2)
-        await message.answer("Теперь введите задание для 2-й группы (или напишите «-», если не задано):")
+        await message.answer("Введите задание для 2-й группы (или «-»):")
     else:
         await state.update_data(task=message.text)
-        await state.set_state(AddHomework.due_date)
-        await message.answer("На какую дату задано? Введите в формате ДД.ММ.ГГГГ:")
+        await state.set_state(AddHomework.textbook)
+        await message.answer("Введите автора и учебник (например: <i>Алгебра 10 кл, Алимов Ш.А.</i>) или «-»:", parse_mode="HTML")
 
 @router.message(AddHomework.task_group2)
 async def process_task_group2(message: Message, state: FSMContext):
@@ -265,13 +283,22 @@ async def process_task_group2(message: Message, state: FSMContext):
     
     combined_task = f"\n   ▫️ <i>1 группа:</i> {g1}\n   ▫️ <i>2 группа:</i> {g2}"
     await state.update_data(task=combined_task)
+    await state.set_state(AddHomework.textbook)
+    await message.answer("Введите автора и учебник (или «-»):")
+
+@router.message(AddHomework.textbook)
+async def process_textbook(message: Message, state: FSMContext):
+    textbook = message.text.strip()
+    if textbook == "-":
+        textbook = None
+    await state.update_data(textbook=textbook)
+    
     await state.set_state(AddHomework.due_date)
     await message.answer("На какую дату задано? Введите в формате ДД.ММ.ГГГГ:")
 
 @router.message(AddHomework.due_date)
 async def process_date(message: Message, state: FSMContext):
     try:
-        # Превращаем '16.11.2026' в '2026-11-16' для правильного поиска в SQLite
         parsed_date = datetime.strptime(message.text.strip(), "%d.%m.%Y").date()
         await state.update_data(due_date=parsed_date.isoformat())
     except ValueError:
@@ -289,7 +316,6 @@ async def process_date(message: Message, state: FSMContext):
 async def process_photo(message: Message, state: FSMContext):
     file_id = None
     if message.photo:
-        # Берем самое высокое разрешение прикрепленной картинки
         file_id = message.photo[-1].file_id
     elif message.text != "Без фото":
         await message.answer("Пожалуйста, отправьте фотографию или нажмите кнопку «Без фото».")
@@ -300,7 +326,8 @@ async def process_photo(message: Message, state: FSMContext):
         subject=data["subject"],
         task=data["task"],
         due_date=data["due_date"],
-        file_id=file_id
+        file_id=file_id,
+        textbook=data.get("textbook")
     )
     await state.clear()
     await message.answer(
@@ -322,7 +349,6 @@ async def show_delete_hw_menu(message: Message):
     buttons = []
     for hw_id, due_date_str, subject, task in items:
         pretty_date = datetime.strptime(due_date_str, "%Y-%m-%d").strftime("%d.%m")
-        # Обрезаем длинный текст задания, чтобы кнопка выглядела аккуратно
         short_task = (task[:20] + "...") if len(task) > 20 else task
         btn_text = f"❌ {pretty_date} | {subject}: {short_task}"
         buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"del_hw_{hw_id}")])
@@ -336,7 +362,6 @@ async def process_delete_hw(callback: CallbackQuery):
         await callback.answer("Нет прав.", show_alert=True)
         return
 
-    # Достаем числовой ID записи из callback_data ("del_hw_5" -> 5)
     hw_id = int(callback.data.split("_")[-1])
     await delete_homework_by_id(hw_id)
 
@@ -348,7 +373,7 @@ async def show_edit_hw_menu(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN1_ID and message.from_user.id != ADMIN2_ID:
         return
 
-    items = await get_all_active_homework() # Функция уже есть в вашем файле
+    items = await get_all_active_homework()
     if not items:
         await message.answer("Актуальных домашних заданий для изменения нет.")
         return
@@ -358,7 +383,6 @@ async def show_edit_hw_menu(message: Message, state: FSMContext):
         pretty_date = datetime.strptime(due_date_str, "%Y-%m-%d").strftime("%d.%m")
         short_task = (task[:20] + "...") if len(task) > 20 else task
         btn_text = f"✏️ {pretty_date} | {subject}: {short_task}"
-        # Передаем edit_hw_{hw_id}
         buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"edit_hw_{hw_id}")])
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -391,7 +415,6 @@ async def process_edit_task(message: Message, state: FSMContext):
         reply_markup=cancel_kb
     )
 
-# 4. Принимаем новый учебник
 @router.message(EditHomework.new_textbook)
 async def process_edit_textbook(message: Message, state: FSMContext):
     textbook = message.text.strip()
@@ -427,7 +450,6 @@ async def process_edit_photo(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, отправьте фотографию или нажмите кнопку «Без изменений».")
         return
 
-    # Запрос на обновление записи в базе
     async with aiosqlite.connect(DB_NAME) as db:
         if update_photo_sql:
             await db.execute(
@@ -435,7 +457,6 @@ async def process_edit_photo(message: Message, state: FSMContext):
                 params
             )
         else:
-            # Если фото не меняли, обновляем только текст и учебник
             await db.execute(
                 "UPDATE homework SET task = ?, textbook = ? WHERE id = ?",
                 params

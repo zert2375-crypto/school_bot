@@ -4,9 +4,12 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 import aiosqlite
 import dotenv
 from os import getenv
-from google import genai
+from openai import AsyncOpenAI
 
-ai_client = genai.Client(api_key=getenv("GEMINI_API_KEY"))
+ai_client = AsyncOpenAI(
+    api_key=getenv("DEEPSEEK_API_KEY"),
+    base_url="https://api.deepseek.com"
+)
 
 dotenv.load_dotenv(override=True)
 ADMIN1_ID = int(getenv("ADMIN1_ID"))
@@ -44,7 +47,7 @@ async def init_db():
                     subject TEXT NOT NULL,
                     task TEXT NOT NULL,
                     due_date TEXT NOT NULL,
-                    file_id TEXT
+                    file_id TEXT,
                     textbook TEXT
                 )
             """)
