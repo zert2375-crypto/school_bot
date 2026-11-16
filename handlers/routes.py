@@ -4,19 +4,13 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 import aiosqlite
 import dotenv
 from os import getenv
-from openai import AsyncOpenAI
-
-ai_client = AsyncOpenAI(
-    api_key=getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com"
-)
 
 dotenv.load_dotenv(override=True)
 ADMIN1_ID = int(getenv("ADMIN1_ID"))
 ADMIN2_ID = int(getenv("ADMIN2_ID"))
 router = Router()
 
-DB_NAME = "Schedule.sql"
+DB_NAME = "data/Schedule.sql"
 Days = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница"]
 
 WEEKDAYS_RU = {
@@ -72,7 +66,8 @@ def get_main_reply_keyboard(user_id: int):
                     [KeyboardButton(text="Изменить дз")],
                     [KeyboardButton(text="Удалить дз")],
                     [KeyboardButton(text="Загрузить фото задания")],
-                    [KeyboardButton(text="Управление фото заданий")]
+                    [KeyboardButton(text="Управление фото заданий")],
+                    [KeyboardButton(text="Управление кэшем ИИ")]
                 ],
                 resize_keyboard=True
             )
